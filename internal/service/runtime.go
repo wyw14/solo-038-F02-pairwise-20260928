@@ -55,6 +55,8 @@ type Runtime struct {
 	folderControl   *folder.Controller
 	splice          *splice.State
 	spliceControl   *splice.Coordinator
+	webBlock        *WebBlock
+	webRecoveries   []WebRecovery
 	incidents       []Incident
 }
 

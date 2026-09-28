@@ -43,14 +43,19 @@ func (path *Path) Update(name string, tension float64, available bool) error {
 }
 
 func (path *Path) Ready() bool {
+	_, blocked := path.BlockedSegment()
+	return !blocked
+}
+
+func (path *Path) BlockedSegment() (string, bool) {
 	path.mu.RLock()
 	defer path.mu.RUnlock()
 	for _, segment := range path.segments {
 		if !segment.Available || segment.Tension <= 0 {
-			return false
+			return segment.Name, true
 		}
 	}
-	return true
+	return "", false
 }
 
 func (path *Path) Segments() []Segment {

@@ -24,6 +24,9 @@ func NewRouter(runtime *service.Runtime) http.Handler {
 		api.Get("/interlocks", handler.interlocks)
 		api.Get("/incidents", handler.incidents)
 		api.Get("/recovery", handler.recoveryStatus)
+		api.Get("/web/path", handler.webPath)
+		api.Post("/web/segments", handler.updateWebSegment)
+		api.Get("/web/recoveries", handler.webRecoveries)
 		api.Post("/jobs/current/cancel", handler.cancelCurrent)
 	})
 	return router

@@ -37,6 +37,10 @@ func (runtime *Runtime) SaveSnapshot() error {
 		return fmt.Errorf("there is no current job")
 	}
 	owner, jobGeneration, rollGeneration, threaded, meter := runtime.web.Snapshot()
-	values := map[string]any{"job": current, "web_owner": owner, "web_job_generation": jobGeneration, "web_roll_generation": rollGeneration, "web_threaded": threaded, "web_meter": meter}
+	blockedSegment := ""
+	if block, blocked := runtime.WebBlock(); blocked {
+		blockedSegment = block.Segment
+	}
+	values := map[string]any{"job": current, "web_owner": owner, "web_job_generation": jobGeneration, "web_roll_generation": rollGeneration, "web_threaded": threaded, "web_meter": meter, "web_blocked_segment": blockedSegment}
 	return runtimeSaveSnapshot(runtime.config.DataDir, values)
 }

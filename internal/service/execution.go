@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -47,6 +48,8 @@ func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string) error
 		return runtime.loadRollOperation(current)
 	case "feed_web":
 		return runtime.feedWebOperation(ctx, current)
+	case "resume_web":
+		return runtime.resumeWebOperation(current)
 	case "stop_press":
 		return runtime.stopPressOperation(current)
 	case "adjust_phase":
@@ -89,6 +92,10 @@ func (runtime *Runtime) loadRollOperation(current model.Job) error {
 
 func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job) error {
 	now := time.Now()
+	if segment, blocked := runtime.webControl.BlockedSegment(); blocked {
+		runtime.noteWebBlock(segment, now)
+		return &web.PathBlockedError{Segment: segment}
+	}
 	forceA := sensor.Reading{ID: string(model.NewOperationID()), Kind: sensor.ReadingForce, Source: "load-cell-a", Origin: "load-cell-a", Value: 90, Unit: "N", ObservedAt: now}
 	forceB := sensor.Reading{ID: string(model.NewOperationID()), Kind: sensor.ReadingForce, Source: "load-cell-b", Origin: "load-cell-b", Value: 91, Unit: "N", ObservedAt: now}
 	tension, err := sensor.DeriveTension(forceA, 10, string(model.NewOperationID()))
@@ -117,6 +124,10 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 		return err
 	}
 	if err := runtime.webControl.Advance(string(current.ID), 1, permit, now); err != nil {
+		var blocked *web.PathBlockedError
+		if errors.As(err, &blocked) {
+			runtime.noteWebBlock(blocked.Segment, now)
+		}
 		return err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -125,18 +136,7 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 	if _, err := web.AwaitWorker(context.Background(), result); err != nil {
 		return err
 	}
-	return runtime.verifyPath(readings)
-}
-
-func (runtime *Runtime) verifyPath(readings []sensor.Reading) error {
-	path, err := web.NewPath([]web.Segment{{Name: "unwind", Length: 4, Tension: 8, Available: true}, {Name: "press", Length: 12, Tension: 8, Available: true}, {Name: "dryer", Length: 18, Tension: 7, Available: true}})
-	if err != nil {
-		return err
-	}
-	if err := path.Update("press", 8.2, true); err != nil {
-		return err
-	}
-	if len(path.Segments()) < 3 || len(readings) < 2 {
+	if len(runtime.webControl.Segments()) < 3 || len(readings) < 2 {
 		return fmt.Errorf("web path diagnostics are incomplete")
 	}
 	return nil
