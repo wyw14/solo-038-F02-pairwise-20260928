@@ -10,10 +10,12 @@ import (
 )
 
 type RecoveryTrace struct {
-	Steps          []string `json:"steps"`
-	FenceLoaded    bool     `json:"fence_loaded"`
-	FeedStarted    bool     `json:"feed_started"`
-	RollGeneration uint64   `json:"roll_generation"`
+	Steps           []string `json:"steps"`
+	FenceLoaded     bool     `json:"fence_loaded"`
+	FeedStarted     bool     `json:"feed_started"`
+	RollGeneration  uint64   `json:"roll_generation"`
+	BlockedSegment  string   `json:"blocked_segment,omitempty"`
+	RecheckSequence uint64   `json:"recheck_sequence"`
 }
 
 func (runtime *Runtime) RecoverFeed(recovered journal.RecoveredState, speed float64) (RecoveryTrace, error) {
@@ -22,7 +24,15 @@ func (runtime *Runtime) RecoverFeed(recovered journal.RecoveredState, speed floa
 		return RecoveryTrace{}, err
 	}
 	trace := RecoveryTrace{RollGeneration: decision.Job.RollGeneration}
-	webRecord := web.Recovery{Owner: decision.RecoveredOwner, JobGeneration: decision.Job.Generation, RollGeneration: decision.Job.RollGeneration, Threaded: true}
+	webRecord := web.Capture(runtime.web)
+	webRecord.Owner = decision.RecoveredOwner
+	webRecord.JobGeneration = decision.Job.Generation
+	webRecord.RollGeneration = decision.Job.RollGeneration
+	webRecord.Threaded = true
+	if webRecord.Blockage != nil {
+		trace.BlockedSegment = webRecord.Blockage.Segment
+	}
+	trace.RecheckSequence = webRecord.Recheck.Sequence
 	if err := web.Restore(runtime.web, webRecord); err != nil {
 		return trace, err
 	}
@@ -33,7 +43,7 @@ func (runtime *Runtime) RecoverFeed(recovered journal.RecoveredState, speed floa
 		return trace, err
 	}
 	trace.Steps = append(trace.Steps, "unwind_state_loaded")
-	if decision.MayFeed {
+	if decision.MayFeed && webRecord.Blockage == nil {
 		if err := unwind.ResumeAtSafeSpeed(runtime.unwind, decision.RecoveredOwner, decision.Job.RollGeneration, speed, 15); err != nil {
 			return trace, err
 		}

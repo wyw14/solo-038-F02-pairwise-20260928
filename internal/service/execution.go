@@ -29,7 +29,7 @@ var commandKinds = map[string]model.CommandKind{
 	"switch_ink":   model.CommandInkRoute,
 }
 
-func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string) error {
+func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string, params OperationParams) error {
 	current, ok := runtime.jobs.Current()
 	if !ok {
 		return fmt.Errorf("there is no active job")
@@ -47,6 +47,10 @@ func (runtime *Runtime) ExecuteOperation(ctx context.Context, kind string) error
 		return runtime.loadRollOperation(current)
 	case "feed_web":
 		return runtime.feedWebOperation(ctx, current)
+	case "segment_break":
+		return runtime.segmentBreakOperation(current, params)
+	case "segment_repair":
+		return runtime.segmentRepairOperation(current, params)
 	case "stop_press":
 		return runtime.stopPressOperation(current)
 	case "adjust_phase":
@@ -101,6 +105,9 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 	runtime.sensors.PutReading(tension)
 	runtime.sensors.PutReading(speed)
 	readings := runtime.sensors.CurrentReadings(now, time.Second)
+	if err := runtime.webControl.EnsureClear(); err != nil {
+		return err
+	}
 	permit, err := runtime.webControl.Permit([]sensor.Reading{forceA, forceB}, runtime.config.RegisterTolerance, now)
 	if err != nil {
 		return err
@@ -117,6 +124,7 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 		return err
 	}
 	if err := runtime.webControl.Advance(string(current.ID), 1, permit, now); err != nil {
+		runtime.unwind.StopFeed(string(current.ID))
 		return err
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -125,20 +133,58 @@ func (runtime *Runtime) feedWebOperation(ctx context.Context, current model.Job)
 	if _, err := web.AwaitWorker(context.Background(), result); err != nil {
 		return err
 	}
-	return runtime.verifyPath(readings)
-}
-
-func (runtime *Runtime) verifyPath(readings []sensor.Reading) error {
-	path, err := web.NewPath([]web.Segment{{Name: "unwind", Length: 4, Tension: 8, Available: true}, {Name: "press", Length: 12, Tension: 8, Available: true}, {Name: "dryer", Length: 18, Tension: 7, Available: true}})
-	if err != nil {
-		return err
-	}
-	if err := path.Update("press", 8.2, true); err != nil {
-		return err
-	}
-	if len(path.Segments()) < 3 || len(readings) < 2 {
+	if len(runtime.webControl.Path()) < 3 || len(readings) < 2 {
 		return fmt.Errorf("web path diagnostics are incomplete")
 	}
+	return nil
+}
+
+// segmentBreakOperation marks a segment unable to carry the web, which blocks
+// the running job at its current meter, and stops further unwinding.
+func (runtime *Runtime) segmentBreakOperation(current model.Job, params OperationParams) error {
+	segment := params.Segment
+	if segment == "" {
+		return fmt.Errorf("segment name is required")
+	}
+	now := time.Now().UTC()
+	if _, err := runtime.webControl.MarkSegment(segment, 0, false, now); err != nil {
+		return err
+	}
+	runtime.unwind.StopFeed(string(current.ID))
+	_, _, _, _, meter, _, _ := runtime.web.Snapshot()
+	runtime.RecordIncident("error", "web", fmt.Sprintf("segment %s blocked, feed stopped at roll meter %.2f", segment, meter))
+	return nil
+}
+
+// segmentRepairOperation restores a segment, re-verifies the whole path and,
+// only when the full recheck passes, resumes feeding at the original meter.
+func (runtime *Runtime) segmentRepairOperation(current model.Job, params OperationParams) error {
+	segment := params.Segment
+	if segment == "" {
+		return fmt.Errorf("segment name is required")
+	}
+	tension := params.Tension
+	if tension <= 0 {
+		return fmt.Errorf("segment tension must be positive after repair")
+	}
+	now := time.Now().UTC()
+	if _, err := runtime.webControl.MarkSegment(segment, tension, true, now); err != nil {
+		return err
+	}
+	recheck, err := runtime.webControl.RecheckPath(now)
+	if err != nil {
+		runtime.RecordIncident("warning", "web", fmt.Sprintf("segment %s repair recheck did not release the path", segment))
+		return err
+	}
+	_, rollGeneration, _, _ := runtime.unwind.Snapshot()
+	if rollGeneration == 0 {
+		rollGeneration = current.RollGeneration
+	}
+	if err := unwind.ResumeAtSafeSpeed(runtime.unwind, string(current.ID), rollGeneration, 5, 15); err != nil {
+		return err
+	}
+	_, _, _, _, meter, _, _ := runtime.web.Snapshot()
+	runtime.RecordIncident("info", "web", fmt.Sprintf("segment %s repaired, recheck #%d released feed at roll meter %.2f", segment, recheck.Sequence, meter))
 	return nil
 }
 

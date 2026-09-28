@@ -18,7 +18,13 @@ type Operation struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
-func (runtime *Runtime) CreateOperation(ctx context.Context, kind string) (Operation, error) {
+// OperationParams carries optional payload for path segment operations.
+type OperationParams struct {
+	Segment string
+	Tension float64
+}
+
+func (runtime *Runtime) CreateOperation(ctx context.Context, kind string, params OperationParams) (Operation, error) {
 	if kind == "" {
 		return Operation{}, fmt.Errorf("operation kind is required")
 	}
@@ -31,7 +37,7 @@ func (runtime *Runtime) CreateOperation(ctx context.Context, kind string) (Opera
 	if !ok {
 		return Operation{}, fmt.Errorf("there is no active job")
 	}
-	if err := runtime.ExecuteOperation(ctx, kind); err != nil {
+	if err := runtime.ExecuteOperation(ctx, kind, params); err != nil {
 		return Operation{}, err
 	}
 	return Operation{ID: model.NewOperationID(), Kind: kind, JobID: jobValue.ID, Status: "accepted", CreatedAt: time.Now().UTC()}, nil
@@ -41,11 +47,17 @@ func (runtime *Runtime) Equipment() []map[string]any {
 	roll, generation, feedOwner, feedSpeed := runtime.unwind.Snapshot()
 	plate, plateGeneration, color, phases := runtime.press.Snapshot()
 	ready, folderSpeed, cutLength, fault, lots := runtime.folder.Snapshot()
+	_, _, _, threaded, meter, blockage, recheck := runtime.web.Snapshot()
+	blockedSegment := ""
+	if blockage != nil {
+		blockedSegment = blockage.Segment
+	}
 	values := []map[string]any{
 		{"name": "unwind", "roll": roll, "generation": generation, "owner": feedOwner, "speed": feedSpeed},
 		{"name": "press", "plate": plate, "generation": plateGeneration, "color": color, "phases": phases},
 		{"name": "dryer", "state": runtime.dryerControlStatus()},
 		{"name": "folder", "ready": ready, "speed": folderSpeed, "cut_length": cutLength, "fault": fault, "lots": lots},
+		{"name": "web", "segments": runtime.webControl.Path(), "threaded": threaded, "meter": meter, "blocked_segment": blockedSegment, "recheck_sequence": recheck.Sequence},
 	}
 	sort.Slice(values, func(left, right int) bool { return values[left]["name"].(string) < values[right]["name"].(string) })
 	return values

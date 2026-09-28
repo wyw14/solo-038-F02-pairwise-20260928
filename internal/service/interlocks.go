@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
@@ -14,11 +15,18 @@ type Interlock struct {
 
 func (runtime *Runtime) Interlocks() []Interlock {
 	now := time.Now().UTC()
-	_, _, _, threaded, _ := runtime.web.Snapshot()
+	_, _, _, threaded, _, blockage, recheck := runtime.web.Snapshot()
 	status, _ := runtime.dryerControl.Status()
 	ready, _, _, fault, _ := runtime.folder.Snapshot()
+	pathDetail := "web path is clear"
+	if blockage != nil {
+		pathDetail = fmt.Sprintf("segment %s is blocking the web", blockage.Segment)
+	} else if recheck.Sequence > 0 {
+		pathDetail = fmt.Sprintf("web path released by recheck #%d", recheck.Sequence)
+	}
 	values := []Interlock{
 		{Name: "web_threaded", Satisfied: threaded, Detail: "paper web is fenced and threaded", CheckedAt: now},
+		{Name: "web_path_clear", Satisfied: blockage == nil, Detail: pathDetail, CheckedAt: now},
 		{Name: "dryer_ready", Satisfied: status == "ready", Detail: "dryer damper and profile startup are complete", CheckedAt: now},
 		{Name: "folder_ready", Satisfied: ready, Detail: fault, CheckedAt: now},
 		{Name: "press_stopped_for_splice", Satisfied: runtime.pressControl.CanSplice(), Detail: "current stop epoch has zero-speed proof", CheckedAt: now},

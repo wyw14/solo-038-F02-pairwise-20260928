@@ -7,7 +7,9 @@ import (
 )
 
 type operationRequest struct {
-	Kind string `json:"kind"`
+	Kind    string  `json:"kind"`
+	Segment string  `json:"segment"`
+	Tension float64 `json:"tension"`
 }
 
 func (handler *Handler) operations(writer http.ResponseWriter, request *http.Request) {
@@ -25,7 +27,7 @@ func (handler *Handler) createOperation(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	operation, err := handler.runtime.CreateOperation(request.Context(), input.Kind)
+	operation, err := handler.runtime.CreateOperation(request.Context(), input.Kind, service.OperationParams{Segment: input.Segment, Tension: input.Tension})
 	if err != nil {
 		writeError(writer, http.StatusConflict, err)
 		return
